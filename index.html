@@ -149,7 +149,7 @@
         const colors = [...new Set(emojiData.map(e => e.color))];
         const traits = [...new Set(emojiData.reduce((acc, c) => [...acc, ...c.traits], []))].sort();
 
-        let mode = 'AI', peer, conn, mySecret, oppSecret, myTurn = true, eliminated = [], gameOver = false;
+        let mode = 'AI', peer, conn, mySecret = null, oppSecret = null, myTurn = true, eliminated = [], gameOver = false;
 
         // INIT: Check URL for Join ID
         window.onload = () => {
@@ -180,7 +180,6 @@
             peer = new Peer(); 
             peer.on('open', (id) => {
                 document.getElementById('hostIdDisplay').value = id;
-                // Create a full URL for the QR code
                 const fullUrl = window.location.href.split('?')[0] + '?join=' + id;
                 document.getElementById("qrContainer").innerHTML = "";
                 new QRCode(document.getElementById("qrContainer"), { text: fullUrl, width: 150, height: 150 });
@@ -213,13 +212,26 @@
         function renderSelectionBoard() {
             const el = document.getElementById('selectBoard');
             el.innerHTML = '<p style="grid-column: 1/-1; text-align:center; color:#aaa">Pick the emoji your opponent must guess!</p>';
+            
+            // Reset secrets
+            mySecret = null;
+            oppSecret = null;
+
             emojiData.forEach(item => {
                 const card = document.createElement('div');
                 card.className = 'card';
                 card.textContent = item.char;
                 card.onclick = () => {
+                    if(mySecret) return; // Prevent double click
                     mySecret = item;
+                    
+                    // 1. Change MY screen to waiting immediately
+                    el.innerHTML = '<div style="grid-column:1/-1; text-align:center; padding:50px;">Waiting for opponent...</div>';
+                    
+                    // 2. Send secret to opponent
                     conn.send({ type: 'SECRET', secret: item });
+                    
+                    // 3. Check if game can start
                     checkReady();
                 }
                 el.appendChild(card);
@@ -227,13 +239,15 @@
         }
 
         function checkReady() {
-            const el = document.getElementById('selectBoard');
-            el.innerHTML = '<div style="grid-column:1/-1; text-align:center; padding:50px;">Waiting for opponent...</div>';
+            // Only start the game if BOTH players have defined their secrets
             if (mySecret && oppSecret) {
                 // Deterministic turn order
                 myTurn = mySecret.char.codePointAt(0) > oppSecret.char.codePointAt(0);
                 startGame();
             }
+            // If one is missing, we do nothing. 
+            // If 'mySecret' is missing, I am still choosing (UI shows board).
+            // If 'oppSecret' is missing, I am waiting (UI shows "Waiting...").
         }
 
         function startGame() {
@@ -302,9 +316,8 @@
             log(qText, 'me');
             if(mode === 'PVP') conn.send({ type: 'ASK', text: qText });
 
-            // Auto-judge logic
             let isMatch = false;
-            const target = mode === 'AI' ? oppSecret : oppSecret; // logic is same
+            const target = oppSecret; 
             if (cat === 'type' && target.type === val) isMatch = true;
             if (cat === 'color' && target.color === val) isMatch = true;
             if (cat === 'trait' && target.traits.includes(val)) isMatch = true;
@@ -358,7 +371,11 @@
         }
 
         function handleNetworkData(data) {
-            if(data.type === 'SECRET') { oppSecret = data.secret; checkReady(); }
+            if(data.type === 'SECRET') { 
+                oppSecret = data.secret; 
+                // DO NOT change UI here. Just check if we are ready.
+                checkReady(); 
+            }
             if(data.type === 'ASK') log(data.text, 'them');
             if(data.type === 'ANSWER') { log(data.text, 'me'); myTurn = true; updateTurnUI(); }
             if(data.type === 'OVER') {
