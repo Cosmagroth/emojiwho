@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Emoji Enigma: Multiplayer</title>
+    <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: rgba(255, 255, 255, 0.08);
+            --card-border: rgba(255, 255, 255, 0.1);
+            --accent: #8b5cf6;
+            --accent-hover: #7c3aed;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+        * { box-sizing: border-box; font-family: 'Inter', sans-serif; user-select: none; }
+        body { background-color: var(--bg-color); color: var(--text-main); margin: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+        
+        .screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: var(--bg-color); display: flex; flex-direction: column; z-index: 10; transition: opacity 0.3s; }
+        .hidden { display: none !important; opacity: 0; pointer-events: none; }
+        
+        h1 { font-size: 1.5rem; text-align: center; margin-bottom: 2rem; }
+        h2 { font-size: 1.2rem; margin-bottom: 1rem; color: var(--text-muted); text-align: center; }
+
+        .container { width: 100%; max-width: 500px; margin: 0 auto; padding: 2rem; display: flex; flex-direction: column; gap: 1rem; justify-content: center; height: 100%; }
+
+        button { background: linear-gradient(135deg, var(--accent), var(--accent-hover)); border: none; color: white; padding: 16px; border-radius: 12px; font-size: 1rem; font-weight: 600; cursor: pointer; margin-bottom: 10px; }
+        button.secondary { background: var(--card-bg); border: 1px solid var(--card-border); }
+        input { background: var(--card-bg); border: 1px solid var(--card-border); padding: 14px; border-radius: 8px; color: white; font-size: 1rem; text-align: center; outline: none; width: 100%; margin-bottom: 10px; }
+
+        /* GAME BOARD */
+        header { padding: 0.8rem 1rem; background: rgba(15,23,42,0.9); display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--card-border); }
+        .turn-indicator { font-size: 0.8rem; padding: 4px 10px; border-radius: 20px; background: #334155; }
+        .turn-active { background: var(--accent); animation: pulse 2s infinite; }
+
+        main { flex: 1; display: flex; overflow: hidden; position: relative; }
+        .game-board { flex: 1; padding: 1rem; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); grid-auto-rows: 90px; gap: 0.5rem; align-content: start; }
+
+        .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 10px; display: flex; justify-content: center; align-items: center; font-size: 2.5rem; cursor: pointer; transition: 0.2s; }
+        .card.eliminated { opacity: 0.1; filter: grayscale(100%); pointer-events: none; }
+        .card:hover { background: rgba(255,255,255,0.15); transform: translateY(-2px); }
+
+        /* CONTROLS */
+        .controls { height: 260px; border-top: 1px solid var(--card-border); background: rgba(15,23,42,0.95); padding: 1rem; display: flex; flex-direction: column; gap: 8px; }
+        .chat-log { flex: 1; overflow-y: auto; font-size: 0.85rem; display: flex; flex-direction: column; gap: 6px; margin-bottom: 5px;}
+        .msg { padding: 6px 10px; border-radius: 6px; max-width: 90%; }
+        .msg-sys { color: var(--text-muted); font-size: 0.75rem; text-align: center; align-self: center; }
+        .msg-me { background: #334155; align-self: flex-end; }
+        .msg-them { background: var(--accent); align-self: flex-start; }
+        .action-row { display: flex; gap: 8px; }
+        select { flex: 1; padding: 10px; background: #1e293b; color: white; border: 1px solid #334155; border-radius: 8px; }
+        
+        #qrContainer { background: white; padding: 1rem; border-radius: 10px; width: fit-content; margin: 10px auto; }
+        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(139, 92, 246, 0); } 100% { box-shadow: 0 0 0 0 rgba(139, 92, 246, 0); } }
+    </style>
+</head>
+<body>
+
+    <!-- MENU -->
+    <div id="menuScreen" class="screen">
+        <div class="container">
+            <h1>🕵️ Emoji Enigma</h1>
+            <button onclick="startAI()">🤖 Play vs AI</button>
+            <button onclick="showHostMenu()">📡 Host Game (Create QR)</button>
+            <button onclick="showJoinMenu()" class="secondary">🔗 Join via ID</button>
+        </div>
+    </div>
+
+    <!-- HOST -->
+    <div id="hostScreen" class="screen hidden">
+        <div class="container">
+            <h2>Scan to Join</h2>
+            <div id="qrContainer"></div>
+            <p style="text-align: center; color: var(--text-muted); font-size: 0.8rem">Or share this ID:</p>
+            <input type="text" id="hostIdDisplay" readonly onclick="this.select()">
+            <div class="msg-sys">Waiting for player...</div>
+            <button class="secondary" onclick="location.href=location.href.split('?')[0]">Cancel</button>
+        </div>
+    </div>
+
+    <!-- JOIN -->
+    <div id="joinScreen" class="screen hidden">
+        <div class="container">
+            <h2>Enter Game ID</h2>
+            <input type="text" id="joinInput" placeholder="Paste ID here">
+            <div id="statusMsg" class="msg-sys"></div>
+            <button onclick="joinGameManually()">Connect</button>
+            <button class="secondary" onclick="location.href=location.href.split('?')[0]">Back</button>
+        </div>
+    </div>
+
+    <!-- SELECT -->
+    <div id="selectScreen" class="screen hidden">
+        <header><h1>Pick Secret Emoji</h1></header>
+        <div class="game-board" id="selectBoard"></div>
+    </div>
+
+    <!-- GAME -->
+    <div id="gameScreen" class="screen hidden">
+        <header>
+            <div>Emoji Enigma</div>
+            <div id="turnBadge" class="turn-indicator">Waiting...</div>
+            <button onclick="location.href=location.href.split('?')[0]" style="padding: 4px 10px; margin:0; font-size:0.7rem; width:auto;">Exit</button>
+        </header>
+        <main><div class="game-board" id="playBoard"></div></main>
+        <div class="controls">
+            <div class="chat-log" id="chatLog"></div>
+            <div class="action-row">
+                <select id="qType" onchange="updateSub()"><option disabled selected>Type...</option><option value="type">Is it a...</option><option value="color">Color...</option><option value="trait">Trait...</option></select>
+                <select id="qValue" disabled><option>-</option></select>
+            </div>
+            <button id="askBtn" onclick="askQuestion()" disabled style="padding: 12px; margin:0;">Ask Question</button>
+        </div>
+    </div>
+
+    <script>
+        // GAME DATA
+        const emojiData = [
+            { char: "🦁", type: "animal", color: "orange", traits: ["hair", "wild", "tail"] },
+            { char: "🐸", type: "animal", color: "green", traits: ["wild", "water"] },
+            { char: "🐙", type: "animal", color: "red", traits: ["wild", "water", "many legs"] },
+            { char: "🦄", type: "animal", color: "white", traits: ["fantasy", "hair", "horn"] },
+            { char: "🐷", type: "animal", color: "pink", traits: ["farm", "tail"] },
+            { char: "🦇", type: "animal", color: "black", traits: ["wild", "fly", "wings"] },
+            { char: "🍎", type: "food", color: "red", traits: ["fruit", "plant", "sweet"] },
+            { char: "🥑", type: "food", color: "green", traits: ["fruit", "plant", "seed"] },
+            { char: "🍕", type: "food", color: "yellow", traits: ["cooked", "round", "cheese"] },
+            { char: "🍩", type: "food", color: "brown", traits: ["cooked", "round", "sweet", "hole"] },
+            { char: "🥕", type: "food", color: "orange", traits: ["vegetable", "plant", "long"] },
+            { char: "🍦", type: "food", color: "white", traits: ["sweet", "cold", "dairy"] },
+            { char: "👮", type: "person", color: "blue", traits: ["job", "hat", "male"] },
+            { char: "👩‍⚕️", type: "person", color: "white", traits: ["job", "female", "doctor"] },
+            { char: "🤡", type: "person", color: "red", traits: ["job", "makeup", "hair"] },
+            { char: "🧙‍♂️", type: "person", color: "blue", traits: ["fantasy", "hat", "beard"] },
+            { char: "🧟", type: "person", color: "green", traits: ["fantasy", "scary", "undead"] },
+            { char: "🎅", type: "person", color: "red", traits: ["fantasy", "beard", "hat"] },
+            { char: "⚽", type: "object", color: "white", traits: ["sport", "round"] },
+            { char: "🎸", type: "object", color: "red", traits: ["music", "strings"] },
+            { char: "🚗", type: "object", color: "red", traits: ["vehicle", "wheels"] },
+            { char: "💣", type: "object", color: "black", traits: ["weapon", "round", "fire"] },
+            { char: "📱", type: "object", color: "black", traits: ["tech", "rectangle"] },
+            { char: "💎", type: "object", color: "blue", traits: ["expensive", "shiny"] }
+        ];
+
+        const types = [...new Set(emojiData.map(e => e.type))];
+        const colors = [...new Set(emojiData.map(e => e.color))];
+        const traits = [...new Set(emojiData.reduce((acc, c) => [...acc, ...c.traits], []))].sort();
+
+        let mode = 'AI', peer, conn, mySecret, oppSecret, myTurn = true, eliminated = [], gameOver = false;
+
+        // INIT: Check URL for Join ID
+        window.onload = () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const joinId = urlParams.get('join');
+            if (joinId) {
+                document.getElementById('joinInput').value = joinId;
+                showScreen('joinScreen');
+                document.getElementById('statusMsg').innerText = "Auto-connecting...";
+                setTimeout(joinGameManually, 1000);
+            }
+        }
+
+        function showScreen(id) {
+            document.querySelectorAll('.screen').forEach(s => s.classList.add('hidden'));
+            document.getElementById(id).classList.remove('hidden');
+        }
+
+        function startAI() {
+            mode = 'AI';
+            oppSecret = emojiData[Math.floor(Math.random() * emojiData.length)];
+            myTurn = true;
+            startGame();
+        }
+
+        function showHostMenu() {
+            showScreen('hostScreen');
+            peer = new Peer(); 
+            peer.on('open', (id) => {
+                document.getElementById('hostIdDisplay').value = id;
+                // Create a full URL for the QR code
+                const fullUrl = window.location.href.split('?')[0] + '?join=' + id;
+                document.getElementById("qrContainer").innerHTML = "";
+                new QRCode(document.getElementById("qrContainer"), { text: fullUrl, width: 150, height: 150 });
+            });
+            peer.on('connection', (c) => { conn = c; setupConnection(); });
+        }
+
+        function showJoinMenu() { showScreen('joinScreen'); }
+
+        function joinGameManually() {
+            const id = document.getElementById('joinInput').value.trim();
+            if(!id) return alert("Enter ID");
+            peer = new Peer();
+            peer.on('open', () => {
+                conn = peer.connect(id);
+                setupConnection();
+            });
+            peer.on('error', (err) => alert("Connection Error: " + err));
+        }
+
+        function setupConnection() {
+            conn.on('open', () => {
+                mode = 'PVP';
+                showScreen('selectScreen');
+                renderSelectionBoard();
+            });
+            conn.on('data', handleNetworkData);
+        }
+
+        function renderSelectionBoard() {
+            const el = document.getElementById('selectBoard');
+            el.innerHTML = '<p style="grid-column: 1/-1; text-align:center; color:#aaa">Pick the emoji your opponent must guess!</p>';
+            emojiData.forEach(item => {
+                const card = document.createElement('div');
+                card.className = 'card';
+                card.textContent = item.char;
+                card.onclick = () => {
+                    mySecret = item;
+                    conn.send({ type: 'SECRET', secret: item });
+                    checkReady();
+                }
+                el.appendChild(card);
+            });
+        }
+
+        function checkReady() {
+            const el = document.getElementById('selectBoard');
+            el.innerHTML = '<div style="grid-column:1/-1; text-align:center; padding:50px;">Waiting for opponent...</div>';
+            if (mySecret && oppSecret) {
+                // Deterministic turn order
+                myTurn = mySecret.char.codePointAt(0) > oppSecret.char.codePointAt(0);
+                startGame();
+            }
+        }
+
+        function startGame() {
+            showScreen('gameScreen');
+            eliminated = []; gameOver = false;
+            renderBoard(); updateTurnUI();
+            log(mode === 'AI' ? "I picked a secret. You go first!" : "Connected! Game on.", 'sys');
+        }
+
+        function updateTurnUI() {
+            const badge = document.getElementById('turnBadge');
+            const btn = document.getElementById('askBtn');
+            if(gameOver) {
+                badge.textContent = "Game Over";
+                badge.className = "turn-indicator";
+                btn.disabled = true;
+                return;
+            }
+            if(myTurn) {
+                badge.textContent = "Your Turn";
+                badge.classList.add('turn-active');
+                btn.disabled = false;
+                document.getElementById('gameScreen').style.opacity = "1";
+            } else {
+                badge.textContent = "Opponent's Turn";
+                badge.classList.remove('turn-active');
+                btn.disabled = true;
+                if(mode==='PVP') document.getElementById('gameScreen').style.opacity = "0.7";
+            }
+        }
+
+        function renderBoard() {
+            const board = document.getElementById('playBoard');
+            board.innerHTML = '';
+            emojiData.forEach((item, idx) => {
+                const div = document.createElement('div');
+                div.className = 'card';
+                div.textContent = item.char;
+                if (eliminated.includes(idx)) div.classList.add('eliminated');
+                div.onclick = () => makeGuess(idx);
+                board.appendChild(div);
+            });
+        }
+
+        function updateSub() {
+            const cat = document.getElementById('qType').value;
+            const valSelect = document.getElementById('qValue');
+            valSelect.innerHTML = ''; valSelect.disabled = false;
+            let opts = [];
+            if (cat === 'type') opts = types;
+            if (cat === 'color') opts = colors;
+            if (cat === 'trait') opts = traits;
+            opts.forEach(o => {
+                const opt = document.createElement('option');
+                opt.value = o; opt.textContent = o;
+                valSelect.appendChild(opt);
+            });
+        }
+
+        function askQuestion() {
+            if(!myTurn || gameOver) return;
+            const cat = document.getElementById('qType').value;
+            const val = document.getElementById('qValue').value;
+            if(!cat || !val) return;
+            const qText = `Is it ${cat==='type'?'a':''} ${val}?`;
+            log(qText, 'me');
+            if(mode === 'PVP') conn.send({ type: 'ASK', text: qText });
+
+            // Auto-judge logic
+            let isMatch = false;
+            const target = mode === 'AI' ? oppSecret : oppSecret; // logic is same
+            if (cat === 'type' && target.type === val) isMatch = true;
+            if (cat === 'color' && target.color === val) isMatch = true;
+            if (cat === 'trait' && target.traits.includes(val)) isMatch = true;
+            
+            setTimeout(() => handleAnswer(isMatch, cat, val), 600);
+        }
+
+        function handleAnswer(isMatch, cat, val) {
+            const txt = isMatch ? "Yes!" : "No.";
+            log(txt, 'them');
+            if(mode === 'PVP') conn.send({ type: 'ANSWER', text: txt });
+
+            const toEliminate = [];
+            emojiData.forEach((e, i) => {
+                if(eliminated.includes(i)) return;
+                let hasProp = false;
+                if(cat === 'type' && e.type === val) hasProp = true;
+                if(cat === 'color' && e.color === val) hasProp = true;
+                if(cat === 'trait' && e.traits.includes(val)) hasProp = true;
+                if(isMatch && !hasProp) toEliminate.push(i);
+                if(!isMatch && hasProp) toEliminate.push(i);
+            });
+            eliminated.push(...toEliminate);
+            renderBoard();
+            myTurn = false; updateTurnUI();
+            if(mode === 'AI') setTimeout(aiTurn, 1500);
+        }
+
+        function makeGuess(idx) {
+            if(!myTurn || gameOver) return;
+            const guess = emojiData[idx];
+            if (guess.char === oppSecret.char) {
+                log(`I guess ${guess.char}... WON!`, 'me');
+                if(mode==='PVP') conn.send({ type: 'OVER', result: 'LOSE', guess: guess.char });
+                alert("YOU WON!"); gameOver = true;
+            } else {
+                log(`I guess ${guess.char}... Wrong!`, 'me');
+                if(mode==='PVP') conn.send({ type: 'OVER', result: 'WIN', guess: guess.char });
+                alert("Wrong guess! You lose."); gameOver = true;
+            }
+            updateTurnUI();
+        }
+
+        function aiTurn() {
+            if(gameOver) return;
+            log("Thinking...", 'them');
+            setTimeout(() => {
+                log("Passing turn back to you.", 'them');
+                myTurn = true; updateTurnUI();
+            }, 1500);
+        }
+
+        function handleNetworkData(data) {
+            if(data.type === 'SECRET') { oppSecret = data.secret; checkReady(); }
+            if(data.type === 'ASK') log(data.text, 'them');
+            if(data.type === 'ANSWER') { log(data.text, 'me'); myTurn = true; updateTurnUI(); }
+            if(data.type === 'OVER') {
+                gameOver = true;
+                alert(data.result === 'WIN' ? "YOU WON!" : "YOU LOST!");
+                updateTurnUI();
+            }
+        }
+
+        function log(msg, sender) {
+            const d = document.createElement('div');
+            d.className = `msg msg-${sender}`; d.textContent = msg;
+            const log = document.getElementById('chatLog');
+            log.appendChild(d); log.scrollTop = log.scrollHeight;
+        }
+    </script>
+</body>
+</html>
